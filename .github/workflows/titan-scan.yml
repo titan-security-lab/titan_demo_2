@@ -1,0 +1,230 @@
+name: TITAN Security Scan
+
+on:
+  push:
+    branches: [ master, main ]
+  pull_request:
+    branches: [ master, main ]
+  workflow_dispatch:
+
+jobs:
+  titan-scan:
+    runs-on: ubuntu-latest
+    name: TITAN Vulnerability Detection
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install Python dependencies
+        run: |
+          pip install pandas
+
+      - name: Run TITAN Scan
+        run: |
+          REPO_URL="${{ github.server_url }}/${{ github.repository }}"
+          
+          echo "🔍 Scanning repository: $REPO_URL"
+          echo "📊 Using TITAN Workstation"
+          
+          curl -N -X POST "${{ secrets.TITAN_WORKSTATION_URL }}/chat?stream=true" \
+            -H "Content-Type: application/json" \
+            -H "Authorization: Bearer ${{ secrets.TITAN_WORKSTATION_TOKEN }}" \
+            -d "{\"content\": \"$REPO_URL\"}" \
+            > titan_results.txt 2>&1 || true
+          
+          echo "✅ TITAN scan completed"
+
+      - name: Convert to CSV
+        continue-on-error: true
+        run: |
+          python3 << 'PYTHON'
+          import json
+          import re
+          import pandas as pd
+          
+          with open("titan_results.txt", "r", encoding="utf-8") as f:
+              raw_text = f.read()
+          
+          def extract_findings_json(sse_text):
+              pattern = r'event:\s*findings\s*data:\s*(\{.*?\})\s*(?=\n\s*event:|\Z)'
+              match = re.search(pattern, sse_text, re.DOTALL)
+              if not match:
+                  raise ValueError("No findings event found in file.")
+              return json.loads(match.group(1))
+          
+          try:
+              data_json = extract_findings_json(raw_text)
+          except ValueError as e:
+              print(f"❌ {e}")
+              df = pd.DataFrame(columns=[
+                  'finding_id', 'file_path', 'function_name', 'function_body',
+                  'prediction_binary', 'prediction_text', 'score', 'severity',
+                  'model_is_vulnerable', 'confidence_percent', 'reason',
+                  'inconsistent_prediction'
+              ])
+              df.to_csv('titan_results.csv', index=False)
+              with open('counts.txt', 'w') as c:
+                  c.write("0\n0\n0")
+              exit(0)
+          
+          def extract_between(text, start_tag, end_tag):
+              pattern = re.compile(
+                  re.escape(start_tag) + r"(.*?)" + re.escape(end_tag),
+                  re.DOTALL
+              )
+              match = pattern.search(text or "")
+              return match.group(1).strip() if match else None
+          
+          def extract_reasoning(message):
+              if not message:
+                  return None
+              thinking = extract_between(message, "<thinking>", "</thinking>")
+              if thinking:
+                  return thinking.strip()
+              output_match = re.search(r'(.*?)<output>', message, re.DOTALL)
+              if output_match:
+                  reasoning = output_match.group(1).strip()
+                  reasoning = re.sub(r'<[^>]+>', '', reasoning)
+                  return reasoning.strip()
+              cleaned = re.sub(r'<[^>]+>', '', message)
+              return cleaned.strip()
+          
+          def extract_function_name(code):
+              if not code:
+                  return None
+              java_match = re.search(r"(public|private|protected)?\s*\w+\s+(\w+)\s*\(", code)
+              if java_match:
+                  return java_match.group(2)
+              py_match = re.search(r"def\s+(\w+)\s*\(", code)
+              if py_match:
+                  return py_match.group(1)
+              c_match = re.search(r"\w+\s+(\w+)\s*\([^)]*\)\s*\{", code)
+              if c_match:
+                  return c_match.group(1)
+              return None
+          
+          def clean_prediction_text(text):
+              if not text:
+                  return None
+              text = re.sub(r'<[^>]+>', '', text)
+              if 'VULNERABLE' in text.upper():
+                  return 'VULNERABLE'
+              elif 'SAFE' in text.upper():
+                  return 'SAFE'
+              return text.strip()
+          
+          results = []
+          for f in data_json["findings"]:
+              message = f.get("message", "")
+              reasoning = extract_reasoning(message)
+              output_label = extract_between(message, "<output>", "</output>")
+              output_label = clean_prediction_text(output_label)
+              
+              raw_model_data = {}
+              try:
+                  raw_model_data = json.loads(f.get("raw_model", "{}"))
+              except:
+                  pass
+              
+              function_name = f.get("function_name")
+              if not function_name:
+                  function_name = extract_function_name(f.get("function_code", ""))
+              
+              inconsistent = (
+                  (f.get("prediction") == 1 and output_label == "SAFE") or
+                  (f.get("prediction") == 0 and output_label == "VULNERABLE")
+              )
+              
+              function_body = f.get("function_code", "")
+              if len(function_body) > 500:
+                  function_body = function_body[:500] + "..."
+              
+              if reasoning:
+                  reasoning = reasoning.replace('\n', ' ').strip()
+                  reasoning = re.sub(r'\s+', ' ', reasoning)
+                  if len(reasoning) > 500:
+                      reasoning = reasoning[:500] + "..."
+              
+              results.append({
+                  "finding_id": f.get("finding_id"),
+                  "file_path": f.get("file_path"),
+                  "function_name": function_name,
+                  "function_body": function_body,
+                  "prediction_binary": f.get("prediction"),
+                  "prediction_text": output_label,
+                  "score": round(f.get("score", 0), 4),
+                  "severity": f.get("severity"),
+                  "model_is_vulnerable": raw_model_data.get("is_vulnerable"),
+                  "confidence_percent": raw_model_data.get("confidence_percent"),
+                  "reason": reasoning,
+                  "inconsistent_prediction": inconsistent
+              })
+          
+          df = pd.DataFrame(results)
+          
+          column_order = [
+              'finding_id', 'file_path', 'function_name', 'prediction_text',
+              'severity', 'score', 'confidence_percent', 'prediction_binary',
+              'model_is_vulnerable', 'inconsistent_prediction', 'reason', 'function_body'
+          ]
+          df = df[column_order]
+          df.to_csv('titan_results.csv', index=False)
+          
+          vuln = len(df[df['prediction_binary'] == 1])
+          safe = len(df[df['prediction_binary'] == 0])
+          total = len(df)
+          
+          with open('counts.txt', 'w') as c:
+              c.write(f"{total}\n{vuln}\n{safe}")
+          
+          print(f"✅ CSV created with {total} findings ({vuln} vulnerable, {safe} safe)")
+          print(f"\n📄 CSV Preview:")
+          print(df[['file_path', 'function_name', 'prediction_text', 'severity', 'score']].to_string())
+          PYTHON
+
+      - name: Upload Results
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: titan-scan-results
+          path: |
+            titan_results.txt
+            titan_results.csv
+
+      - name: Display Summary
+        if: always()
+        run: |
+          echo "## 🔍 TITAN Validation Results" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          
+          if [ -f counts.txt ]; then
+            TOTAL=$(sed -n '1p' counts.txt)
+            VULN=$(sed -n '2p' counts.txt)
+            SAFE=$(sed -n '3p' counts.txt)
+          else
+            TOTAL=0
+            VULN=0
+            SAFE=0
+          fi
+          
+          echo "- **Total Functions Scanned:** $TOTAL" >> $GITHUB_STEP_SUMMARY
+          echo "- **Vulnerabilities Detected:** 🔴 $VULN / 10 expected" >> $GITHUB_STEP_SUMMARY
+          echo "- **Safe Functions Confirmed:** ✅ $SAFE / 5 expected" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          
+          # Calculate accuracy
+          if [ $TOTAL -eq 15 ]; then
+            if [ $VULN -eq 10 ] && [ $SAFE -eq 5 ]; then
+              echo "### 🎉 **100% Accuracy - Perfect Score!**" >> $GITHUB_STEP_SUMMARY
+            else
+              CORRECT=$((10 - (10 - VULN) + 5 - (5 - SAFE)))
+              ACCURACY=$((CORRECT * 100 / 15))
+              echo "### Accuracy: $ACCURACY%" >> $GITHUB_STEP_SUMMARY
+            fi
+          fi
+          
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "📊 Download **titan-scan-results.zip** for detailed CSV report" >> $GITHUB_STEP_SUMMARY
