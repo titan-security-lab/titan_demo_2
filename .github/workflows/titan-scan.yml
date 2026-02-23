@@ -1,3 +1,9 @@
+Great idea! Let's rename the output files to include the repo name and timestamp:
+bash
+
+cd ~/Documents/titan_scan-github-template/titan-validation
+
+cat > .github/workflows/titan-scan.yml << 'EOF'
 name: TITAN Security Scan
 
 on:
@@ -21,6 +27,15 @@ jobs:
       - name: Install Python dependencies
         run: |
           pip install pandas
+
+      - name: Set Output Filenames
+        id: filenames
+        run: |
+          REPO_NAME=$(echo "${{ github.repository }}" | cut -d'/' -f2)
+          DATETIME=$(date -u +"%Y-%m-%d_%H-%M-%S")
+          echo "repo_name=${REPO_NAME}" >> $GITHUB_OUTPUT
+          echo "datetime=${DATETIME}" >> $GITHUB_OUTPUT
+          echo "prefix=${REPO_NAME}_${DATETIME}" >> $GITHUB_OUTPUT
 
       - name: Run TITAN Scan
         run: |
@@ -67,7 +82,7 @@ jobs:
               ])
               df.to_csv('titan_results.csv', index=False)
               with open('counts.txt', 'w') as c:
-                  c.write("0\n0\n0")
+                  c.write("0\n0\n0\n0\n0\n0")
               exit(0)
           
           def extract_between(text, start_tag, end_tag):
@@ -190,19 +205,34 @@ jobs:
           print(df[['file_path', 'function_name', 'prediction_text', 'severity', 'score']].to_string())
           PYTHON
 
+      - name: Rename Output Files
+        run: |
+          PREFIX="${{ steps.filenames.outputs.prefix }}"
+          
+          # Rename files with repo name and timestamp
+          mv titan_results.txt "${PREFIX}_scan.txt"
+          mv titan_results.csv "${PREFIX}_scan.csv"
+          
+          echo "📁 Files renamed:"
+          echo "   - ${PREFIX}_scan.txt"
+          echo "   - ${PREFIX}_scan.csv"
+
       - name: Upload Results
         uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: titan-scan-results
+          name: titan-scan-results-${{ steps.filenames.outputs.prefix }}
           path: |
-            titan_results.txt
-            titan_results.csv
+            ${{ steps.filenames.outputs.prefix }}_scan.txt
+            ${{ steps.filenames.outputs.prefix }}_scan.csv
 
       - name: Display Summary
         if: always()
         run: |
           echo "## 🔍 TITAN Security Scan Results" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Repository:** ${{ steps.filenames.outputs.repo_name }}" >> $GITHUB_STEP_SUMMARY
+          echo "**Scan Date:** ${{ steps.filenames.outputs.datetime }} UTC" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           
           if [ -f counts.txt ]; then
@@ -235,4 +265,4 @@ jobs:
             echo "" >> $GITHUB_STEP_SUMMARY
           fi
           
-          echo "📊 Download **titan-scan-results.zip** for detailed CSV report" >> $GITHUB_STEP_SUMMARY
+          echo "📊 Download **titan-scan-results-${{ steps.filenames.outputs.prefix }}.zip**" >> $GITHUB_STEP_SUMMARY
