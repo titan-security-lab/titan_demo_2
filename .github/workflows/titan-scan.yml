@@ -1,9 +1,3 @@
-Great idea! Let's rename the output files to include the repo name and timestamp:
-bash
-
-cd ~/Documents/titan_scan-github-template/titan-validation
-
-cat > .github/workflows/titan-scan.yml << 'EOF'
 name: TITAN Security Scan
 
 on:
@@ -259,7 +253,7 @@ jobs:
           
           if [ $VULN -gt 0 ]; then
             echo "### Vulnerability Breakdown" >> $GITHUB_STEP_SUMMARY
-            [ $CRITICAL -gt 0 ] && echo "- 🔴 **CRITICAL:** $CRITICAL" >> $GITHUB_STEP_SUMMARY
+            [ $CRITICAL -gt 0 ] && echo "- �� **CRITICAL:** $CRITICAL" >> $GITHUB_STEP_SUMMARY
             [ $HIGH -gt 0 ] && echo "- 🟠 **HIGH:** $HIGH" >> $GITHUB_STEP_SUMMARY
             [ $MEDIUM -gt 0 ] && echo "- 🟡 **MEDIUM:** $MEDIUM" >> $GITHUB_STEP_SUMMARY
             echo "" >> $GITHUB_STEP_SUMMARY
