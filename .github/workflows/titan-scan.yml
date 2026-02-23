@@ -176,11 +176,16 @@ jobs:
           vuln = len(df[df['prediction_binary'] == 1])
           safe = len(df[df['prediction_binary'] == 0])
           total = len(df)
+          critical = len(df[(df['prediction_binary'] == 1) & (df['severity'] == 'CRITICAL')])
+          high = len(df[(df['prediction_binary'] == 1) & (df['severity'] == 'HIGH')])
+          medium = len(df[(df['prediction_binary'] == 1) & (df['severity'] == 'MEDIUM')])
           
           with open('counts.txt', 'w') as c:
-              c.write(f"{total}\n{vuln}\n{safe}")
+              c.write(f"{total}\n{vuln}\n{safe}\n{critical}\n{high}\n{medium}")
           
-          print(f"✅ CSV created with {total} findings ({vuln} vulnerable, {safe} safe)")
+          print(f"✅ CSV created with {total} findings")
+          print(f"   - Vulnerabilities: {vuln}")
+          print(f"   - Safe: {safe}")
           print(f"\n📄 CSV Preview:")
           print(df[['file_path', 'function_name', 'prediction_text', 'severity', 'score']].to_string())
           PYTHON
@@ -197,34 +202,37 @@ jobs:
       - name: Display Summary
         if: always()
         run: |
-          echo "## 🔍 TITAN Validation Results" >> $GITHUB_STEP_SUMMARY
+          echo "## 🔍 TITAN Security Scan Results" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           
           if [ -f counts.txt ]; then
             TOTAL=$(sed -n '1p' counts.txt)
             VULN=$(sed -n '2p' counts.txt)
             SAFE=$(sed -n '3p' counts.txt)
+            CRITICAL=$(sed -n '4p' counts.txt)
+            HIGH=$(sed -n '5p' counts.txt)
+            MEDIUM=$(sed -n '6p' counts.txt)
           else
             TOTAL=0
             VULN=0
             SAFE=0
+            CRITICAL=0
+            HIGH=0
+            MEDIUM=0
           fi
           
+          echo "### Summary" >> $GITHUB_STEP_SUMMARY
           echo "- **Total Functions Scanned:** $TOTAL" >> $GITHUB_STEP_SUMMARY
-          echo "- **Vulnerabilities Detected:** 🔴 $VULN / 10 expected" >> $GITHUB_STEP_SUMMARY
-          echo "- **Safe Functions Confirmed:** ✅ $SAFE / 5 expected" >> $GITHUB_STEP_SUMMARY
+          echo "- **Vulnerabilities Found:** 🔴 $VULN" >> $GITHUB_STEP_SUMMARY
+          echo "- **Safe Functions:** ✅ $SAFE" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           
-          # Calculate accuracy
-          if [ $TOTAL -eq 15 ]; then
-            if [ $VULN -eq 10 ] && [ $SAFE -eq 5 ]; then
-              echo "### 🎉 **100% Accuracy - Perfect Score!**" >> $GITHUB_STEP_SUMMARY
-            else
-              CORRECT=$((10 - (10 - VULN) + 5 - (5 - SAFE)))
-              ACCURACY=$((CORRECT * 100 / 15))
-              echo "### Accuracy: $ACCURACY%" >> $GITHUB_STEP_SUMMARY
-            fi
+          if [ $VULN -gt 0 ]; then
+            echo "### Vulnerability Breakdown" >> $GITHUB_STEP_SUMMARY
+            [ $CRITICAL -gt 0 ] && echo "- 🔴 **CRITICAL:** $CRITICAL" >> $GITHUB_STEP_SUMMARY
+            [ $HIGH -gt 0 ] && echo "- 🟠 **HIGH:** $HIGH" >> $GITHUB_STEP_SUMMARY
+            [ $MEDIUM -gt 0 ] && echo "- 🟡 **MEDIUM:** $MEDIUM" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
           fi
           
-          echo "" >> $GITHUB_STEP_SUMMARY
           echo "📊 Download **titan-scan-results.zip** for detailed CSV report" >> $GITHUB_STEP_SUMMARY
